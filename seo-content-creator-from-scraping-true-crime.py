@@ -29,6 +29,15 @@ if "excerpt" not in st.session_state:
 if "faq" not in st.session_state:
     st.session_state.faq = ""
 
+if "article_title" not in st.session_state:
+    st.session_state.article_title = ""
+
+if "wordpress_post_id" not in st.session_state:
+    st.session_state.wordpress_post_id = None
+
+if "wordpress_edit_url" not in st.session_state:
+    st.session_state.wordpress_edit_url = ""
+
 
 NARRATIVE_STRUCTURES = {
     "Nessuna struttura predefinita": """
@@ -421,6 +430,83 @@ def get_narrative_structure_guidance(structure_name: str):
 
 
 # ======================
+# WORDPRESS
+# ======================
+
+def get_secret(section: str, key: str, default: str = ""):
+    """Legge un secret senza mostrare credenziali nell'interfaccia o nei log."""
+    try:
+        return str(st.secrets[section][key]).strip()
+    except (KeyError, TypeError, FileNotFoundError):
+        return default
+
+
+def prepare_wordpress_content(article_html: str, faq_html: str) -> str:
+    """Rimuove l'H1 dal corpo: WordPress lo genera dal campo title."""
+    soup = BeautifulSoup(article_html or "", "html.parser")
+    first_h1 = soup.find("h1")
+    if first_h1:
+        first_h1.decompose()
+
+    article_body = str(soup).strip()
+    faq_body = (faq_html or "").strip()
+
+    if faq_body:
+        return f"{article_body}\n\n<section class=\"article-faq\">\n<h2>Domande frequenti</h2>\n{faq_body}\n</section>"
+
+    return article_body
+
+
+def create_wordpress_draft(title: str, article_html: str, excerpt: str, faq_html: str):
+    wp_url = get_secret("wordpress", "url").rstrip("/")
+    wp_username = get_secret("wordpress", "username")
+    wp_password = get_secret("wordpress", "application_password")
+
+    missing = []
+    if not wp_url:
+        missing.append("wordpress.url")
+    if not wp_username:
+        missing.append("wordpress.username")
+    if not wp_password:
+        missing.append("wordpress.application_password")
+    if missing:
+        raise RuntimeError(
+            "Secrets WordPress mancanti: " + ", ".join(missing)
+        )
+
+    payload = {
+        "title": title.strip(),
+        "content": prepare_wordpress_content(article_html, faq_html),
+        "excerpt": excerpt.strip(),
+        "status": "draft",
+    }
+
+    try:
+        response = requests.post(
+            f"{wp_url}/wp-json/wp/v2/posts",
+            auth=(wp_username, wp_password),
+            json=payload,
+            timeout=45,
+        )
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise RuntimeError(format_http_error("WordPress", exc.response)) from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(f"WordPress: richiesta fallita. Dettaglio: {exc}") from exc
+
+    post = response.json()
+    post_id = post.get("id")
+    if not post_id:
+        raise RuntimeError("WordPress non ha restituito l'ID della bozza creata.")
+
+    return {
+        "id": post_id,
+        "link": post.get("link", ""),
+        "edit_url": f"{wp_url}/wp-admin/post.php?post={post_id}&action=edit",
+    }
+
+
+# ======================
 # GENERAZIONE ARTICOLO
 # ======================
 
@@ -624,22 +710,21 @@ ARTICLE HTML:
 
 st.sidebar.title("API Configuration")
 
-st.sidebar.header("SERP scraping")
-SERPER_KEY = st.sidebar.text_input(
-    "Serper.dev API Key",
-    type="password"
-)
+SERPER_KEY = get_secret("serper", "api_key")
+SERPAPI_KEY = get_secret("serpapi", "api_key")
+OPENAI_KEY = get_secret("openai", "api_key")
 
-st.sidebar.header("People Also Ask")
-SERPAPI_KEY = st.sidebar.text_input(
-    "SerpAPI Key",
-    type="password"
-)
-
-st.sidebar.header("AI generation")
-OPENAI_KEY = st.sidebar.text_input(
-    "OpenAI API Key",
-    type="password"
+st.sidebar.caption("Le API key vengono lette dai Secrets di Streamlit.")
+st.sidebar.write("Serper:", "configurato" if SERPER_KEY else "mancante")
+st.sidebar.write("SerpAPI:", "configurato" if SERPAPI_KEY else "mancante")
+st.sidebar.write("OpenAI:", "configurato" if OPENAI_KEY else "mancante")
+st.sidebar.write(
+    "WordPress:",
+    "configurato" if all([
+        get_secret("wordpress", "url"),
+        get_secret("wordpress", "username"),
+        get_secret("wordpress", "application_password"),
+    ]) else "mancante"
 )
 
 
@@ -709,6 +794,9 @@ if generate:
     st.session_state.meta_description = ""
     st.session_state.excerpt = ""
     st.session_state.faq = ""
+    st.session_state.article_title = article_title.strip()
+    st.session_state.wordpress_post_id = None
+    st.session_state.wordpress_edit_url = ""
     uploaded_documents_context = build_uploaded_documents_context(uploaded_files)
 
     st.subheader("SERP Insights")
@@ -830,3 +918,43 @@ if st.session_state.article:
         file_name=f"{article_title.strip()}.txt",
         mime="text/plain"
     )
+
+    st.subheader("WordPress")
+    st.caption(
+        "Il titolo viene salvato come titolo/H1 WordPress; articolo e FAQ nel corpo; "
+        "l'excerpt nel campo Riassunto. Lo stato resta sempre Bozza."
+    )
+
+    if st.session_state.wordpress_post_id:
+        st.success(
+            f"Bozza WordPress già creata (ID {st.session_state.wordpress_post_id})."
+        )
+        if st.session_state.wordpress_edit_url:
+            st.link_button(
+                "Apri la bozza in WordPress",
+                st.session_state.wordpress_edit_url
+            )
+    elif st.button("Invia come bozza a WordPress", type="primary"):
+        if not st.session_state.article_title:
+            st.error("Titolo H1 mancante: rigenera l'articolo prima dell'invio.")
+        else:
+            with st.spinner("Creazione della bozza WordPress..."):
+                try:
+                    wp_post = create_wordpress_draft(
+                        title=st.session_state.article_title,
+                        article_html=st.session_state.article,
+                        excerpt=st.session_state.excerpt,
+                        faq_html=st.session_state.faq,
+                    )
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state.wordpress_post_id = wp_post["id"]
+                    st.session_state.wordpress_edit_url = wp_post["edit_url"]
+                    st.success(
+                        f"Bozza WordPress creata (ID {wp_post['id']})."
+                    )
+                    st.link_button(
+                        "Apri la bozza in WordPress",
+                        wp_post["edit_url"]
+                    )
