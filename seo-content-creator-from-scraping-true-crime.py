@@ -597,7 +597,7 @@ Vincoli output:
 - META DESCRIPTION: tra 136 e 155 caratteri, naturale, informativa, con soft CTA se coerente
 - EXCERPT: max 160 caratteri, in plain text, senza virgolette
 - FAQ HTML: almeno 6 FAQ in HTML, con domanda in <h3> e risposta in <p>
-- ARTICLE HTML: 1800-3200 parole, HTML pronto per CMS
+- ARTICLE HTML: HTML pronto per CMS
 
 Regole HTML:
 - L'H1 dell'articolo è già definito e deve essere:
