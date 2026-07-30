@@ -598,7 +598,6 @@ Vincoli output:
 - EXCERPT: max 160 caratteri, in plain text, senza virgolette
 - FAQ HTML: almeno 6 FAQ in HTML, con domanda in <h3> e risposta in <p>
 - ARTICLE HTML: HTML pronto per CMS
-- LUNGHEZZA: fra le 1.500 e le 10.000 parole, se esiste una specifica nel custom prompt segui quanto riportato lì
 
 Regole HTML:
 - L'H1 dell'articolo è già definito e deve essere:
